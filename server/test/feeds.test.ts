@@ -284,3 +284,31 @@ describe("Testimonies", () => {
     expect(storage.objects.size).toBe(0);
   });
 });
+
+describe("Cell Group badge on anonymous posts", () => {
+  it("is hidden from others on anonymous prayers, but the author still sees it", async () => {
+    await as(grace).post("/api/prayers").send({ content: "secret", isAnonymous: true });
+    expect((await as(chloe).get("/api/prayers")).body.items[0]).toMatchObject({ author: { name: "Anonymous" }, cellGroup: null });
+    expect((await as(grace).get("/api/prayers")).body.items[0].cellGroup).toMatchObject({ code: "AP1" });
+  });
+
+  it("keeps anonymous Living posts out of CG filters, so the filter can't reveal the group", async () => {
+    const post = (u: ReturnType<typeof tgUser>, content: string, isAnonymous = false) =>
+      as(u).post("/api/living").field("content", content).field("isAnonymous", String(isAnonymous));
+    await post(grace, "anon by grace", true);
+    await post(grace, "named by grace");
+    await as(ben).patch("/api/me").send({ stayAnonymous: true });
+    await post(ben, "ben is stay-anonymous");
+
+    const items = async (u: ReturnType<typeof tgUser>, q: string) => (await as(u).get(`/api/living${q}`)).body.items;
+    const all = await items(chloe, "");
+    expect(all.map((p: any) => [p.content, p.cellGroup?.code ?? null])).toEqual([
+      ["ben is stay-anonymous", null],
+      ["named by grace", "AP1"],
+      ["anon by grace", null],
+    ]);
+    expect((await items(chloe, "?zone=AP1")).map((p: any) => p.content)).toEqual(["named by grace"]);
+    // Authors still find their own posts under their CG.
+    expect((await items(grace, "?zone=AP1")).map((p: any) => p.content)).toEqual(["named by grace", "anon by grace"]);
+  });
+});

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { User } from "../generated/prisma/client.js";
-import type { Viewer } from "./privacy.js";
+import type { FeedAuthor, Viewer } from "./privacy.js";
 
 /** The author columns `feedAuthor` needs. Never select more than this for other people. */
 export const authorSelect = {
@@ -42,3 +42,11 @@ export function toPage<T extends { id: string }>(rows: T[], limit: number): { it
 
 /** Trimmed, non-empty user text. */
 export const text = (max: number) => z.string().trim().min(1, "Can't be empty").max(max);
+
+/**
+ * The Cell Group badge to show with a post. Hidden when the author is shown as
+ * "Anonymous" to this viewer: in a small group the CG alone could identify them.
+ */
+export function visibleCellGroup<T>(cellGroup: T | null, author: FeedAuthor): T | null {
+  return author.isAnonymous && !author.isMe ? null : cellGroup;
+}

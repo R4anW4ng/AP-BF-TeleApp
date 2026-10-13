@@ -94,3 +94,25 @@ export function campaignInfo(start: string, end: string, now: Date = new Date())
     weeksRemaining: Math.ceil(daysRemaining / 7),
   };
 }
+
+/**
+ * 1-based campaign week for the SGT Monday `weekStartKey` ("YYYY-MM-DD"),
+ * or null when that week is outside the campaign.
+ */
+export function campaignWeekOf(weekStartKey: string, start: string, end: string): number | null {
+  const first = sgWeekStart(sgMidnight(start)).getTime();
+  const last = sgWeekStart(sgMidnight(end)).getTime();
+  const week = new Date(`${weekStartKey}T00:00:00Z`).getTime();
+  if (Number.isNaN(week) || week < first || week > last) return null;
+  return Math.round((week - first) / WEEK_MS) + 1;
+}
+
+/** Every campaign Monday as "YYYY-MM-DD", in order. */
+export function campaignWeeks(start: string, end: string): { weekStart: string; weekNumber: number }[] {
+  const weeks = [];
+  const last = sgWeekStart(sgMidnight(end)).getTime();
+  for (let t = sgWeekStart(sgMidnight(start)).getTime(), n = 1; t <= last; t += WEEK_MS, n++) {
+    weeks.push({ weekStart: new Date(t).toISOString().slice(0, 10), weekNumber: n });
+  }
+  return weeks;
+}

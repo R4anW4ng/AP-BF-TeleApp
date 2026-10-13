@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { ReactionType } from "../generated/prisma/client.js";
-import { authorSelect, cellGroupSelect, PageQuerySchema, pageArgs, text, toPage, viewerOf } from "../lib/feed.js";
+import { authorSelect, cellGroupSelect, PageQuerySchema, pageArgs, text, toPage, viewerOf, visibleCellGroup } from "../lib/feed.js";
 import { currentUser, HttpError, idParam } from "../lib/http.js";
 import { feedAuthor, type Viewer } from "../lib/privacy.js";
 import { isUniqueViolation } from "../lib/prismaErrors.js";
@@ -41,13 +41,14 @@ function reactionSummary(reactions: { type: ReactionType; userId: string }[], vi
 
 /** Shape sent to the client: names resolved by privacy rules; no other user's id leaves the server. */
 function prayerDto(p: PrayerRow, viewer: Viewer) {
+  const author = feedAuthor(p.author, p.isAnonymous, viewer);
   return {
     id: p.id,
     content: p.content,
     isAnswered: p.isAnswered,
     createdAt: p.createdAt,
-    author: feedAuthor(p.author, p.isAnonymous, viewer),
-    cellGroup: p.cellGroup,
+    author,
+    cellGroup: visibleCellGroup(p.cellGroup, author),
     reactions: reactionSummary(p.reactions, viewer),
     commentCount: p._count.comments,
     comments: p.comments.map((c) => ({

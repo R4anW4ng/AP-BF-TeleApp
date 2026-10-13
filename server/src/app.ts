@@ -7,8 +7,10 @@ import type { Storage } from "./lib/storage.js";
 import { errorHandler, notFound } from "./middleware/errors.js";
 import { ipLimiter } from "./middleware/rateLimit.js";
 import { telegramAuth } from "./middleware/telegramAuth.js";
+import { adminRouter } from "./routes/admin.js";
 import { cellGroupsRouter } from "./routes/cellGroups.js";
 import { homeRouter } from "./routes/home.js";
+import { leaderboardRouter } from "./routes/leaderboard.js";
 import { livingRouter } from "./routes/living.js";
 import { meRouter } from "./routes/me.js";
 import { pointsRouter } from "./routes/points.js";
@@ -65,6 +67,8 @@ export function createApp(deps: AppDeps): Express {
   api.use("/prayers", prayersRouter());
   api.use("/living", livingRouter(deps));
   api.use("/testimonies", testimoniesRouter(deps));
+  api.use("/leaderboard", leaderboardRouter());
+  api.use("/admin", adminRouter());
   api.use(notFound);
 
   app.use("/api", api);

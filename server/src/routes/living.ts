@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
 import { prisma } from "../db.js";
-import { authorSelect, cellGroupSelect, PageQuerySchema, pageArgs, text, toPage, viewerOf } from "../lib/feed.js";
+import { authorSelect, cellGroupSelect, PageQuerySchema, pageArgs, text, toPage, viewerOf, visibleCellGroup } from "../lib/feed.js";
 import { currentUser, HttpError } from "../lib/http.js";
 import { feedAuthor, type Viewer } from "../lib/privacy.js";
 import { deleteObjects, imageUpload, MAX_IMAGES_PER_POST, mediaUrl, type Storage, storeImages } from "../lib/storage.js";
@@ -19,13 +19,14 @@ const livingInclude = {
 type LivingRow = Awaited<ReturnType<typeof prisma.livingPost.findMany<{ include: typeof livingInclude }>>>[number];
 
 async function livingDto(p: LivingRow, viewer: Viewer, storage: Storage) {
+  const author = feedAuthor(p.author, p.isAnonymous, viewer);
   return {
     id: p.id,
     content: p.content,
     weekNumber: p.weekNumber,
     createdAt: p.createdAt,
-    author: feedAuthor(p.author, p.isAnonymous, viewer),
-    cellGroup: p.cellGroup,
+    author,
+    cellGroup: visibleCellGroup(p.cellGroup, author),
     images: await Promise.all(
       p.media.map(async (m) => ({ id: m.id, url: await mediaUrl(storage, m.storageKey), width: m.width, height: m.height })),
     ),
@@ -59,8 +60,21 @@ export function livingRouter({ storage }: { storage: Storage }): Router {
   router.get("/", async (req, res) => {
     const viewer = viewerOf(currentUser(req));
     const { zone, ...page } = ListQuerySchema.parse(req.query);
+    const byGroup = zone && zone !== "ALL";
     const rows = await prisma.livingPost.findMany({
-      where: { hiddenAt: null, ...(zone && zone !== "ALL" ? { cellGroup: { code: zone } } : {}) },
+      where: {
+        hiddenAt: null,
+        ...(byGroup
+          ? {
+              cellGroup: { code: zone },
+              // Anonymous posts only appear under "All": listing them under a CG would reveal it.
+              OR: [
+                { authorId: viewer.id },
+                { isAnonymous: false, OR: [{ authorId: null }, { author: { is: { stayAnonymous: false } } }] },
+              ],
+            }
+          : {}),
+      },
       include: livingInclude,
       ...pageArgs(page),
     });
