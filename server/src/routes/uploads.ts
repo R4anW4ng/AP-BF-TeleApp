@@ -1,15 +1,9 @@
 import { Router } from "express";
-import multer from "multer";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { currentUser, HttpError } from "../lib/http.js";
-import { MAX_UPLOAD_BYTES, newStorageKey, processImage, type Storage } from "../lib/storage.js";
+import { imageUpload, newStorageKey, processImage, type Storage } from "../lib/storage.js";
 import { userLimiter } from "../middleware/rateLimit.js";
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 5 },
-});
 
 const KindSchema = z.enum(["LIVING_POST", "TESTIMONY"]).default("LIVING_POST");
 
@@ -29,7 +23,7 @@ export function uploadsRouter({ storage }: { storage: Storage }): Router {
     next();
   });
 
-  router.post("/", userLimiter(60 * 60_000, 30), upload.single("image"), async (req, res) => {
+  router.post("/", userLimiter(60 * 60_000, 30), imageUpload.single("image"), async (req, res) => {
     const user = currentUser(req);
     const kind = KindSchema.parse(req.query.kind);
     if (kind === "TESTIMONY" && user.role !== "ADMIN") {

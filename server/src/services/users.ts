@@ -3,7 +3,7 @@ import { prisma } from "../db.js";
 import type { Prisma, User } from "../generated/prisma/client.js";
 import { isUniqueViolation } from "../lib/prismaErrors.js";
 import type { TelegramUser } from "../lib/telegramInitData.js";
-import type { Storage } from "../lib/storage.js";
+import { deleteObjects, type Storage } from "../lib/storage.js";
 
 /** Only bump lastSeenAt this often, so normal requests stay read-only. */
 const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
@@ -87,5 +87,5 @@ export async function deleteUserData(userId: string, storage: Storage): Promise<
   ]);
 
   // Object storage is outside the transaction; a failure here leaves an unreferenced blob, not PII in the DB.
-  if (storage.configured) await Promise.allSettled(orphanMedia.map((m) => storage.deleteObject(m.storageKey)));
+  await deleteObjects(storage, orphanMedia.map((m) => m.storageKey));
 }

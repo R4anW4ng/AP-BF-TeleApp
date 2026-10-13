@@ -6,6 +6,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import multer from "multer";
 import sharp from "sharp";
 import type { StorageConfig } from "../config.js";
 import type { MediaKind } from "../generated/prisma/client.js";
@@ -97,6 +98,13 @@ export function createMemoryStorage(): Storage & { objects: Map<string, { body: 
 // -----------------------------------------------------------------------------
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGES_PER_POST = 4;
+
+/** Multipart parser for image uploads: kept in memory, then re-encoded by processImage. */
+export const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_IMAGES_PER_POST, fields: 10 },
+});
 const MAX_INPUT_PIXELS = 50_000_000;
 const MAX_DIMENSION = 1600;
 const ACCEPTED_FORMATS = new Set(["jpeg", "png", "webp", "gif", "avif", "heif"]);
@@ -144,4 +152,28 @@ export function newStorageKey(kind: MediaKind, now: Date = new Date()): string {
   const prefix = kind.toLowerCase().replace(/_/g, "-");
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   return `${prefix}/${now.getUTCFullYear()}/${month}/${randomUUID()}.webp`;
+}
+
+/** Re-encode and store several images; if any step fails, nothing is left behind in the bucket. */
+export async function storeImages(storage: Storage, kind: MediaKind, files: Buffer[]) {
+  const images = await Promise.all(files.map((f) => processImage(f)));
+  const stored = images.map((img) => ({ ...img, storageKey: newStorageKey(kind) }));
+  const results = await Promise.allSettled(stored.map((s) => storage.putObject(s.storageKey, s.body, s.contentType)));
+  const failure = results.find((r) => r.status === "rejected");
+  if (failure) {
+    await deleteObjects(storage, stored.map((s) => s.storageKey));
+    throw failure.reason;
+  }
+  return stored;
+}
+
+/** Best-effort cleanup: an object we fail to delete is an orphaned blob, never a broken post. */
+export async function deleteObjects(storage: Storage, keys: string[]): Promise<void> {
+  if (!storage.configured || keys.length === 0) return;
+  await Promise.allSettled(keys.map((k) => storage.deleteObject(k)));
+}
+
+/** URL for a stored object, or null when storage isn't configured. */
+export async function mediaUrl(storage: Storage, key: string): Promise<string | null> {
+  return storage.configured ? storage.urlFor(key) : null;
 }

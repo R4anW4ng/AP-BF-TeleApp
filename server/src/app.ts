@@ -9,8 +9,11 @@ import { ipLimiter } from "./middleware/rateLimit.js";
 import { telegramAuth } from "./middleware/telegramAuth.js";
 import { cellGroupsRouter } from "./routes/cellGroups.js";
 import { homeRouter } from "./routes/home.js";
+import { livingRouter } from "./routes/living.js";
 import { meRouter } from "./routes/me.js";
 import { pointsRouter } from "./routes/points.js";
+import { prayersRouter } from "./routes/prayers.js";
+import { testimoniesRouter } from "./routes/testimonies.js";
 import { uploadsRouter } from "./routes/uploads.js";
 
 export interface AppDeps {
@@ -59,6 +62,9 @@ export function createApp(deps: AppDeps): Express {
   api.use("/points", pointsRouter());
   api.use("/cell-groups", cellGroupsRouter());
   api.use("/uploads", uploadsRouter(deps));
+  api.use("/prayers", prayersRouter());
+  api.use("/living", livingRouter(deps));
+  api.use("/testimonies", testimoniesRouter(deps));
   api.use(notFound);
 
   app.use("/api", api);

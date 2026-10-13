@@ -20,3 +20,12 @@ export function currentUser(req: Request): User {
   return req.user;
 }
 
+
+/** The `:id` route parameter as a plain string. */
+export function idParam(req: Request): string {
+  const id = req.params.id;
+  if (typeof id !== "string" || id.length === 0 || id.length > 64) {
+    throw new HttpError(404, "NOT_FOUND", "Not found");
+  }
+  return id;
+}
