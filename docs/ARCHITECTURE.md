@@ -317,6 +317,36 @@ board is a single `GROUP BY cellGroupId`.
 | Stories | Block editor: headings, paragraphs, quotes/verses and photos, added in any order, moved up/down and removed. There's a live preview with the same renderer as the reader, plus "paste a whole story" to turn text into blocks, a cover photo, and save as draft or publish. |
 | People  | Search by name or @username, make or remove admins (with a native confirm), and move members between Cell Groups. You can't demote yourself or a whitelisted admin. |
 
+## Deploying: Render + Supabase
+
+| Variable       | Supabase connection (Project → Connect)                         | Used by |
+|----------------|------------------------------------------------------------------|---------|
+| `DATABASE_URL` | **Transaction pooler**, port 6543, append `?pgbouncer=true`     | the running app |
+| `DIRECT_URL`   | **Session pooler**, port 5432 (IPv4, works on Render free tier) | Prisma CLI: `migrate deploy` |
+
+The transaction pooler can't run migrations (no session state or advisory
+locks); the session pooler can. `prisma.config.ts` makes the CLI use
+`DIRECT_URL` whenever it's set.
+
+**Render build command:** `npm install && npm run render-build`. That's
+`prisma generate`, compile, then `prisma migrate deploy`. If a migration fails,
+the build fails and the previous version keeps running. Start command:
+`npm start`.
+
+**Without CLI access (SQL Editor):** paste
+`server/prisma/supabase/apply-migrations.sql` into Supabase → SQL Editor → Run.
+It holds every migration, skips the ones already recorded, records new ones in
+`_prisma_migrations` exactly like `prisma migrate deploy` (same checksums, so
+both methods can be mixed), and runs in one transaction. After adding a
+migration, run `npm run db:sql`. A test fails if the file is out of date.
+
+**Row Level Security** is enabled on every table (migration
+`enable_row_level_security`), so Supabase's public Data API (anon key) can't
+read them. The app connects as the table owner and is unaffected. Any new
+table needs `ALTER TABLE … ENABLE ROW LEVEL SECURITY` in its migration.
+
+Never use `prisma db push` against production: it bypasses migration history.
+
 ## Local development
 
 ```bash
