@@ -24,3 +24,15 @@ export const formatDate = (iso: string) => dateOnly.format(new Date(iso));
 
 /** For @db.Date values (UTC midnight of the day). */
 export const formatMonth = (iso: string) => monthName.format(new Date(iso));
+
+/** "Mon, 19 Oct, 5:00 am" in Singapore time. */
+export const formatDateTime = (iso: string) =>
+  new Intl.DateTimeFormat("en-SG", { timeZone: SGT, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(new Date(iso));
+
+/** For "YYYY-MM-DD" calendar dates: "19 Oct 2026". */
+export const formatDay = (key: string) =>
+  new Intl.DateTimeFormat("en-SG", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" }).format(new Date(`${key}T00:00:00Z`));
+
+/** For "YYYY-MM": "November 2026". */
+export const formatMonthKey = (key: string) =>
+  new Intl.DateTimeFormat("en-SG", { timeZone: "UTC", month: "long", year: "numeric" }).format(new Date(`${key}-01T00:00:00Z`));

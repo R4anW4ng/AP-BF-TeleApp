@@ -133,6 +133,65 @@ ever returned. A deleted author is `"Former Member"`.
 ```
 
 Testimonies have no comments or reactions. Every create, update and delete is written to the audit log.
+Summaries include `coverMediaId`, so an edit can keep the cover by sending it back. Replacing
+or removing a cover deletes the old image.
+
+**Cell Group badges on anonymous posts:** when a prayer, comment or Living post is shown
+as "Anonymous" to the viewer, its `cellGroup` is `null` (the author still sees it).
+Anonymous Living posts appear only in the unfiltered feed, never under `?zone=`,
+because the filter itself would reveal the group.
+
+## Leaderboards: `/api/leaderboard`
+
+| Method & path | Returns |
+|---------------|---------|
+| `GET /leaderboard/individuals?limit=50` | `{ entries: [{ rank, name, isMe, cellGroup, points }], participants, me: { rank, points, hidden } }` |
+| `GET /leaderboard/cell-groups` | `{ entries: [{ id, code, name, points, members, rank, isMine }] }`, every active CG |
+
+Ranks use competition ranking (ties share a rank: 1, 2, 2, 4). Only members with
+points are listed. Privacy rules for the individual board:
+
+| Stay Anonymous | Show me on boards | Listed? | Name (and CG badge) shown                         |
+|----------------|-------------------|---------|---------------------------------------------------|
+| ON             | any               | No      | `me.hidden: true`; points still count for the CG  |
+| OFF            | ON                | Yes     | real name to CG peers; "Anonymous" (no CG) to others |
+| OFF            | OFF               | Yes     | real name to everyone                             |
+
+CG totals include every member, including Stay Anonymous members. Deleting a
+member's data removes their points from their CG immediately.
+
+## Admin: `/api/admin` (role ADMIN only)
+
+### Weekly challenges
+
+| Method & path                     | Body / returns |
+|-----------------------------------|----------------|
+| `GET /admin/challenges`           | `{ items: [challenge], weeks: [{ weekStart, weekNumber }] }`: all 19 campaign Mondays |
+| `POST /admin/challenges`          | `{ weekStart: "2026-10-19" (a campaign Monday), title (≤200), financialInitiatives: [1–8 × ≤80], description? (≤600), memoryVerseText (≤900), memoryVerseRef (≤100), status: "SCHEDULED"\|"DRAFT", publishAt? }`. `409 WEEK_TAKEN` if the week already has one. |
+| `PUT /admin/challenges/:id`       | Same body. Once broadcast, the text can still be fixed but `weekStart`/`publishAt` can't change (`409 ALREADY_SENT`). |
+| `DELETE /admin/challenges/:id`    | `204` |
+
+`weekNumber` is computed from the campaign start. `publishAt` defaults to Monday
+05:00 SGT and must fall inside that week. A challenge is
+`{ id, weekStart, weekNumber, title, financialInitiatives, description, memoryVerseText, memoryVerseRef, status, publishAt, broadcast: { startedAt, completedAt, sent, failed }, updatedAt }`.
+
+### Monthly goals
+
+| Method & path                          | Body / returns |
+|----------------------------------------|----------------|
+| `GET /admin/monthly-goals`             | `{ months: ["2026-10", …, "2027-02"], items: [{ id, month, title, description, updatedAt }] }` |
+| `PUT /admin/monthly-goals/:YYYY-MM`    | `{ title (≤200), description? (≤500) }`: create or replace. Campaign months only. |
+| `DELETE /admin/monthly-goals/:YYYY-MM` | `204` |
+
+### People
+
+| Method & path                 | Body / returns |
+|-------------------------------|----------------|
+| `GET /admin/users?q=&role=`   | Up to 50 `{ id, name, username, role, cellGroup, points, stayAnonymous, isMe, isWhitelisted, lastSeenAt }`. Admins see real names here; Telegram IDs are never returned. |
+| `POST /admin/users/:id/role`  | `{ role: "ADMIN"\|"USER" }`. You can't demote yourself (`CANNOT_DEMOTE_SELF`) or an `ADMIN_TELEGRAM_IDS` admin (`WHITELISTED_ADMIN`). |
+| `PATCH /admin/users/:id`      | `{ cellGroupId: string \| null }`: move a member. Their points move with them. |
+
+Every admin action is written to `audit_logs` (who, what, when).
 
 ## Health (no auth)
 

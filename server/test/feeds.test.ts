@@ -312,3 +312,25 @@ describe("Cell Group badge on anonymous posts", () => {
     expect((await items(grace, "?zone=AP1")).map((p: any) => p.content)).toEqual(["named by grace", "anon by grace"]);
   });
 });
+
+describe("Testimony cover on edit", () => {
+  it("keeps the cover when re-saved, and deletes a replaced cover from storage", async () => {
+    const up = async () => (await as(admin).post("/api/uploads?kind=TESTIMONY").attach("image", await png(), "c.png")).body.id as string;
+    const [a, b] = [await up(), await up()];
+    const body = { title: "T", blocks: [{ type: "paragraph", text: "p" }], status: "PUBLISHED" };
+    const created = await as(admin).post("/api/testimonies").send({ ...body, coverMediaId: a });
+    expect(created.body.coverMediaId).toBe(a);
+
+    const resaved = await as(admin).put(`/api/testimonies/${created.body.id}`).send({ ...body, coverMediaId: created.body.coverMediaId });
+    expect(resaved.body.coverUrl).toMatch(/^memory:\/\//);
+    expect(storage.objects.size).toBe(2);
+
+    await as(admin).put(`/api/testimonies/${created.body.id}`).send({ ...body, coverMediaId: b }).expect(200);
+    expect(await prisma.media.findUnique({ where: { id: a } })).toBeNull();
+    expect(storage.objects.size).toBe(1);
+
+    await as(admin).put(`/api/testimonies/${created.body.id}`).send({ ...body, coverMediaId: null }).expect(200);
+    expect(await prisma.media.count()).toBe(0);
+    expect(storage.objects.size).toBe(0);
+  });
+});

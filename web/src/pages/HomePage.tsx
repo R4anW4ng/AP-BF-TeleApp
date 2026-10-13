@@ -1,8 +1,11 @@
+import { Link } from "react-router";
 import { useHome, useLogPoints, useMe } from "../api";
+import { useIndividualBoard } from "../api/admin";
 import type { AwardResult, Usage } from "../api/types";
 import { ErrorView, Loading, PageHeader, Section } from "../components/ui";
 import { formatDate, formatMonth } from "../lib/format";
 import { haptic } from "../telegram";
+import { IndividualList, MyRank } from "./LeaderboardPage";
 
 function awardMessage(result: AwardResult | undefined, capped: string): string | null {
   if (!result) return null;
@@ -25,6 +28,24 @@ function LogButton({ kind, usage, label, capped }: { kind: "meal-log" | "tithe";
         {log.isError ? log.error.message : awardMessage(log.data, capped) ?? (done ? capped : `+${usage.points} points`)}
       </p>
     </div>
+  );
+}
+
+function LeaderboardPreview() {
+  const board = useIndividualBoard(3);
+  return (
+    <Section title="🏆 Leaderboard" aside={<Link to="/leaderboard">See all</Link>}>
+      <Link to="/leaderboard" className="card board-preview">
+        {board.data ? (
+          <>
+            <IndividualList board={board.data} />
+            <MyRank me={board.data.me} />
+          </>
+        ) : (
+          <p className="hint">{board.isError ? board.error.message : "Loading…"}</p>
+        )}
+      </Link>
+    </Section>
   );
 }
 
@@ -94,6 +115,8 @@ export function HomePage() {
           <LogButton kind="tithe" usage={me.data.usage.TITHE} label="🙌 I've tithed this month" capped="Logged for this month. Thank you!" />
         </Section>
       )}
+
+      <LeaderboardPreview />
     </>
   );
 }

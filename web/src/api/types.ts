@@ -125,6 +125,7 @@ export interface TestimonySummary {
   byline: string | null;
   status: "DRAFT" | "PUBLISHED" | "SCHEDULED" | "ARCHIVED";
   publishedAt: string | null;
+  coverMediaId: string | null;
   coverUrl: string | null;
   excerpt: string | null;
 }
@@ -139,4 +140,65 @@ export interface UploadedImage {
   url: string;
   width: number;
   height: number;
+}
+
+// ---- Leaderboards ------------------------------------------------------------
+
+export interface IndividualBoard {
+  entries: { rank: number; name: string; isMe: boolean; cellGroup: string | null; points: number }[];
+  participants: number;
+  /** hidden: the viewer turned on Stay Anonymous, so they're not listed. */
+  me: { rank: number | null; points: number; hidden: boolean };
+}
+
+export interface CellGroupBoard {
+  entries: { id: string; code: string; name: string; points: number; members: number; rank: number; isMine: boolean }[];
+}
+
+// ---- Admin -------------------------------------------------------------------
+
+export interface AdminChallenge {
+  id: string;
+  weekStart: string; // YYYY-MM-DD (SGT Monday)
+  weekNumber: number;
+  title: string;
+  financialInitiatives: string[];
+  description: string | null;
+  memoryVerseText: string;
+  memoryVerseRef: string;
+  status: "DRAFT" | "SCHEDULED" | "PUBLISHED" | "ARCHIVED";
+  publishAt: string;
+  broadcast: { startedAt: string | null; completedAt: string | null; sent: number; failed: number };
+  updatedAt: string;
+}
+
+export interface ChallengeInput {
+  weekStart: string;
+  title: string;
+  financialInitiatives: string[];
+  description: string | null;
+  memoryVerseText: string;
+  memoryVerseRef: string;
+  status: "DRAFT" | "SCHEDULED";
+}
+
+export interface AdminGoal {
+  id: string;
+  month: string; // YYYY-MM
+  title: string;
+  description: string | null;
+  updatedAt: string;
+}
+
+export interface Person {
+  id: string;
+  name: string;
+  username: string | null;
+  role: Role;
+  cellGroup: { id: string; code: string } | null;
+  points: number;
+  stayAnonymous: boolean;
+  isMe: boolean;
+  isWhitelisted: boolean;
+  lastSeenAt: string;
 }

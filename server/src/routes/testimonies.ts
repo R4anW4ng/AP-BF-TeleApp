@@ -102,6 +102,7 @@ export function testimoniesRouter({ storage }: { storage: Storage }): Router {
       byline: t.byline,
       status: t.status,
       publishedAt: t.publishedAt,
+      coverMediaId: t.coverMediaId,
       coverUrl: t.coverMedia ? await mediaUrl(storage, t.coverMedia.storageKey) : null,
       excerpt: excerpt(blocksOf(t)),
     };
@@ -182,10 +183,15 @@ export function testimoniesRouter({ storage }: { storage: Storage }): Router {
     const user = currentUser(req);
     const id = idParam(req);
     const input = UpsertSchema.parse(req.body);
-    const existing = await prisma.testimony.findUnique({ where: { id }, include: { media: { select: { id: true, storageKey: true } } } });
+    const existing = await prisma.testimony.findUnique({
+      where: { id },
+      include: { media: { select: { id: true, storageKey: true } }, coverMedia: { select: { id: true, storageKey: true } } },
+    });
     if (!existing) throw new HttpError(404, "NOT_FOUND", "Testimony not found");
     const mediaIds = await validateMedia(input, id);
-    const dropped = existing.media.filter((m) => !mediaIds.includes(m.id));
+    // Inline images and a replaced/removed cover that the new version no longer uses.
+    const previous = new Map([...existing.media, ...(existing.coverMedia ? [existing.coverMedia] : [])].map((m) => [m.id, m]));
+    const dropped = [...previous.values()].filter((m) => !mediaIds.includes(m.id));
 
     const t = await prisma.$transaction(async (tx) => {
       await tx.media.deleteMany({ where: { id: { in: dropped.map((m) => m.id) } } });

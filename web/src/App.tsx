@@ -4,8 +4,14 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { queryClient, useMe } from "./api";
 import { AuthGate } from "./components/AuthGate";
 import { Layout } from "./components/Layout";
-import { AdminPage } from "./pages/AdminPage";
+import { AdminLayout } from "./pages/admin/AdminLayout";
+import { ChallengesAdmin } from "./pages/admin/ChallengesAdmin";
+import { GoalsAdmin } from "./pages/admin/GoalsAdmin";
+import { PeopleAdmin } from "./pages/admin/PeopleAdmin";
+import { TestimoniesAdmin } from "./pages/admin/TestimoniesAdmin";
+import { TestimonyEditor } from "./pages/admin/TestimonyEditor";
 import { HomePage } from "./pages/HomePage";
+import { LeaderboardPage } from "./pages/LeaderboardPage";
 import { LivingPage } from "./pages/LivingPage";
 import { MePage } from "./pages/MePage";
 import { PrayerPage } from "./pages/PrayerPage";
@@ -29,14 +35,23 @@ export function AppRoutes() {
         <Route path="testimonies" element={<TestimoniesPage />} />
         <Route path="testimonies/:id" element={<TestimonyDetailPage />} />
         <Route path="me" element={<MePage />} />
+        <Route path="leaderboard" element={<LeaderboardPage />} />
         <Route
           path="admin"
           element={
             <RequireAdmin>
-              <AdminPage />
+              <AdminLayout />
             </RequireAdmin>
           }
-        />
+        >
+          <Route index element={<Navigate to="challenges" replace />} />
+          <Route path="challenges" element={<ChallengesAdmin />} />
+          <Route path="goals" element={<GoalsAdmin />} />
+          <Route path="testimonies" element={<TestimoniesAdmin />} />
+          <Route path="testimonies/new" element={<TestimonyEditor />} />
+          <Route path="testimonies/:id/edit" element={<TestimonyEditor />} />
+          <Route path="people" element={<PeopleAdmin />} />
+        </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

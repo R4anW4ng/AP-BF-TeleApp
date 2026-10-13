@@ -38,9 +38,9 @@ server/
   src/lib/time.ts             Singapore-time and campaign-week helpers
   src/lib/pin.ts              scrypt PIN hashing
   src/middleware/             telegramAuth, requireAdmin, rate limits, errors
-  src/services/               points (caps, streaks), users (sync, delete), broadcast
+  src/services/               points (caps, streaks), users (sync, delete), broadcast, leaderboard
   src/routes/                 /api/me, /home, /points, /cell-groups, /uploads,
-                              /prayers, /living, /testimonies
+                              /prayers, /living, /testimonies, /leaderboard, /admin
   scripts/sign-init-data.ts   signed auth header for local curl testing
   test/                       vitest: unit + API tests against Postgres
 web/
@@ -48,7 +48,9 @@ web/
   src/api/client.ts           fetch wrapper that injects `Authorization: tma <initData>`
   src/api/index.ts            React Query hooks for every endpoint
   src/components/             BottomNav, Layout, AuthGate, PinGate, UI bits
-  src/pages/                  Home, Prayer, Living, Testimonies, Me, Admin
+  src/pages/                  Home, Prayer, Living, Testimonies, Me, Leaderboard
+  src/pages/admin/            Weekly challenges, Monthly goals, Stories (block editor), People
+  src/lib/blocks.ts           testimony editor helpers (reorder, strict API payload)
 docs/                         this file, API.md
 ```
 
@@ -297,6 +299,23 @@ does this on Cloudflare Pages and Netlify.
 Data is fetched with TanStack Query. Home always refetches when the app opens
 or regains focus (including Telegram's `activated` event), so Monday's
 challenge appears right after 05:00 SGT.
+
+## Leaderboards and Admin Dashboard (Phase 5)
+
+**Leaderboards** (`/leaderboard`, previewed on Home): an Individuals / Cell Groups
+toggle. Both are computed server-side (`services/leaderboard.ts`), so the
+privacy rules in `lib/privacy.ts` decide every name before it leaves the
+server. The individual board reads the indexed `users.totalPoints`. The CG
+board is a single `GROUP BY cellGroupId`.
+
+**Admin Dashboard** (`/admin`, admins only, with server-side `requireAdmin` on `/api/admin`):
+
+| Section | What admins do |
+|---------|----------------|
+| Weekly  | Pick a campaign week (1–19), enter the initiatives, memory verse and reference, then Schedule or save a draft. A status badge shows Draft / Scheduled (with the SGT time) / Live / Sent to N. Scheduled challenges are what the Monday 05:00 cron broadcasts. |
+| Monthly | One spiritual goal per campaign month. It shows on Home and is included in each Monday message. |
+| Stories | Block editor: headings, paragraphs, quotes/verses and photos, added in any order, moved up/down and removed. There's a live preview with the same renderer as the reader, plus "paste a whole story" to turn text into blocks, a cover photo, and save as draft or publish. |
+| People  | Search by name or @username, make or remove admins (with a native confirm), and move members between Cell Groups. You can't demote yourself or a whitelisted admin. |
 
 ## Local development
 

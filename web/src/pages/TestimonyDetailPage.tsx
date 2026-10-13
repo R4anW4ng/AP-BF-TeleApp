@@ -1,34 +1,10 @@
 import { useCallback } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useTestimony } from "../api";
-import type { TestimonyBlock } from "../api/types";
+import { TestimonyBody } from "../components/TestimonyBlocks";
 import { ErrorView, Loading } from "../components/ui";
 import { formatDate } from "../lib/format";
 import { useBackButton } from "../telegram";
-
-/** Blocks are rendered as plain elements; there is no HTML injection path. Read-only: no comments or reactions. */
-function Block({ block }: { block: TestimonyBlock }) {
-  switch (block.type) {
-    case "heading":
-      return <h2>{block.text}</h2>;
-    case "paragraph":
-      return <p>{block.text}</p>;
-    case "quote":
-      return (
-        <blockquote className="verse">
-          {block.text}
-          {block.cite && <cite>{block.cite}</cite>}
-        </blockquote>
-      );
-    case "image":
-      return block.url ? (
-        <figure>
-          <img src={block.url} alt={block.caption ?? ""} loading="lazy" width={block.width ?? undefined} height={block.height ?? undefined} />
-          {block.caption && <figcaption className="hint">{block.caption}</figcaption>}
-        </figure>
-      ) : null;
-  }
-}
 
 export function TestimonyDetailPage() {
   const { id = "" } = useParams();
@@ -49,9 +25,7 @@ export function TestimonyDetailPage() {
         {t.byline && `${t.byline} · `}
         {t.publishedAt ? formatDate(t.publishedAt) : "Draft"}
       </p>
-      {t.blocks.map((block, i) => (
-        <Block key={i} block={block} />
-      ))}
+      <TestimonyBody blocks={t.blocks} />
     </article>
   );
 }
