@@ -76,15 +76,15 @@ enum AuditAction {
 }
 
 // -----------------------------------------------------------------------------
-//  Zones (Cell Groups)
+//  Cell Groups (AP1, AP2, ... within zone AP)
 // -----------------------------------------------------------------------------
 
-/// A Cell Group zone, e.g. ZN1, ZN2. A table (not an enum) so admins can add
-/// zones without a migration.
-model Zone {
+/// A Cell Group, e.g. AP1, AP2. A table (not an enum) so admins can add
+/// groups without a migration. The parent zone ("AP") is app config.
+model CellGroup {
   id        String   @id @default(cuid())
-  code      String   @unique // "ZN1"
-  name      String // "Zone 1"
+  code      String   @unique // "AP1"
+  name      String // "Cell Group AP1"
   sortOrder Int      @default(0)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -93,7 +93,7 @@ model Zone {
   prayers     Prayer[]
   livingPosts LivingPost[]
 
-  @@map("zones")
+  @@map("cell_groups")
 }
 
 // -----------------------------------------------------------------------------
@@ -113,9 +113,9 @@ model User {
   photoUrl     String?
   languageCode String?
 
-  role   Role    @default(USER)
-  zoneId String?
-  zone   Zone?   @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  role        Role       @default(USER)
+  cellGroupId String?
+  cellGroup   CellGroup? @relation(fields: [cellGroupId], references: [id], onDelete: SetNull)
 
   // --- Privacy (resolved into a public name by a single server-side function)
   /// "Stay Anonymous": hide real name on leaderboards and feeds for everyone.
@@ -157,7 +157,7 @@ model User {
   monthlyGoals      MonthlyGoal[]
   auditLogsAsActor  AuditLog[]         @relation("AuditActor")
 
-  @@index([zoneId])
+  @@index([cellGroupId])
   @@index([totalPoints(sort: Desc)])
   @@index([botStartedAt, botBlocked, notificationsEnabled])
   @@map("users")
@@ -256,27 +256,27 @@ model MonthlyGoal {
 // -----------------------------------------------------------------------------
 
 model Prayer {
-  id          String    @id @default(cuid())
+  id          String     @id @default(cuid())
   /// NULL after the author deletes their data -> rendered as "Former Member".
   authorId    String?
-  author      User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
-  /// Zone snapshot at time of posting (kept after author deletion).
-  zoneId      String?
-  zone        Zone?     @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  author      User?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  /// Cell Group snapshot at time of posting (kept after author deletion).
+  cellGroupId String?
+  cellGroup   CellGroup? @relation(fields: [cellGroupId], references: [id], onDelete: SetNull)
   content     String
   /// Per-post choice to post anonymously (independent of profile setting).
-  isAnonymous Boolean   @default(false)
-  isAnswered  Boolean   @default(false)
+  isAnonymous Boolean    @default(false)
+  isAnswered  Boolean    @default(false)
   /// Moderation soft-hide by an admin.
   hiddenAt    DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   comments  PrayerComment[]
   reactions PrayerReaction[]
 
   @@index([createdAt(sort: Desc)])
-  @@index([zoneId, createdAt(sort: Desc)])
+  @@index([cellGroupId, createdAt(sort: Desc)])
   @@index([authorId])
   @@map("prayers")
 }
@@ -318,24 +318,24 @@ model PrayerReaction {
 // -----------------------------------------------------------------------------
 
 model LivingPost {
-  id          String    @id @default(cuid())
+  id          String     @id @default(cuid())
   authorId    String?
-  author      User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
-  /// Zone snapshot at time of posting — powers the zone filter.
-  zoneId      String?
-  zone        Zone?     @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  author      User?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  /// Cell Group snapshot at time of posting — powers the CG filter.
+  cellGroupId String?
+  cellGroup   CellGroup? @relation(fields: [cellGroupId], references: [id], onDelete: SetNull)
   content     String
   /// Campaign week number at time of posting.
   weekNumber  Int
-  isAnonymous Boolean   @default(false)
+  isAnonymous Boolean    @default(false)
   hiddenAt    DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   media Media[]
 
   @@index([createdAt(sort: Desc)])
-  @@index([zoneId, createdAt(sort: Desc)])
+  @@index([cellGroupId, createdAt(sort: Desc)])
   @@index([authorId])
   @@map("living_posts")
 }

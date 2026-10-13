@@ -11,8 +11,8 @@
 
 ### Why PostgreSQL over MongoDB
 
-The data is relational: users belong to zones, posts and prayers belong to
-users, points roll up to users and then to zones. Postgres gives us:
+The data is relational: users belong to Cell Groups, posts and prayers belong to
+users, points roll up to users and then to Cell Groups. Postgres gives us:
 
 - **Unique constraints that enforce point caps** under concurrent taps (see below).
 - **Foreign-key actions** that make "Delete my data" correct by construction
@@ -24,22 +24,33 @@ users, points roll up to users and then to zones. Postgres gives us:
 
 ```
 server/
-  prisma/schema.prisma     data model
-  prisma/migrations/       SQL migrations (committed)
-  prisma/seed.ts           zones + sample week/month content
-  prisma.config.ts         Prisma 7 config (DB URL, seed command)
-  src/db.ts                PrismaClient (pg driver adapter)
-web/                       React Mini App (Phase 4)
-docs/
+  prisma/schema.prisma        data model
+  prisma/migrations/          SQL migrations (committed)
+  prisma/seed.ts              Cell Groups AP1–AP4 (+ optional sample content)
+  src/index.ts                process entry: HTTP server (+ bot/cron in Phase 3)
+  src/app.ts                  Express app: helmet, CORS, rate limits, routes
+  src/config.ts               zod-validated environment
+  src/lib/telegramInitData.ts initData HMAC-SHA256 validation
+  src/lib/storage.ts          Cloudflare R2 / S3 client + image processing
+  src/lib/privacy.ts          who may see whose real name
+  src/lib/time.ts             Singapore-time and campaign-week helpers
+  src/lib/pin.ts              scrypt PIN hashing
+  src/middleware/             telegramAuth, requireAdmin, rate limits, errors
+  src/services/               points (caps, streaks), users (sync, delete)
+  src/routes/                 /api/me, /home, /points, /cell-groups, /uploads
+  scripts/sign-init-data.ts   signed auth header for local curl testing
+  test/                       vitest: unit + API tests against Postgres
+web/                          React Mini App (Phase 4)
+docs/                         this file, API.md
 ```
 
 ## Data model
 
 ```mermaid
 erDiagram
-  Zone ||--o{ User : "members"
-  Zone ||--o{ Prayer : "snapshot"
-  Zone ||--o{ LivingPost : "snapshot"
+  CellGroup ||--o{ User : "members"
+  CellGroup ||--o{ Prayer : "snapshot"
+  CellGroup ||--o{ LivingPost : "snapshot"
   User ||--o{ PointTransaction : "earns (CASCADE)"
   User ||--o{ Prayer : "authors (SET NULL)"
   User ||--o{ PrayerComment : "authors (SET NULL)"
@@ -61,37 +72,42 @@ erDiagram
 Every award is a `PointTransaction` row with the unique key
 `(userId, type, periodKey, slot)`:
 
-| Trigger       | `periodKey`  | `slot`            | Effect                         |
-|---------------|--------------|-------------------|--------------------------------|
-| `TITHE`       | `2026-10`    | `1`               | once per SGT month             |
-| `MEAL_LOG`    | `2026-10-13` | `1..3`            | max 3 per SGT day              |
-| `LIVING_POST` | `2026-10-13` | `1..N`            | configurable daily cap         |
-| `ADMIN_ADJUSTMENT` | cuid    | `1`               | one row per manual adjustment  |
+| Trigger            | Points | `periodKey`  | `slot` | Cap                        |
+|--------------------|--------|--------------|--------|----------------------------|
+| `TITHE`            | 100    | `2026-10`    | `1`    | 1 per SGT month            |
+| `MEAL_LOG`         | 5      | `2026-10-13` | `1..3` | 3 per SGT day (15 pts)     |
+| `LIVING_POST`      | 10     | `2026-10-13` | `1..2` | 2 per SGT day (20 pts)     |
+| `ADMIN_ADJUSTMENT` | ±n     | cuid         | `1`    | one row per adjustment     |
 
 Two concurrent taps cannot both claim the same slot: the loser gets a `P2002`
-error, which the API turns into "daily limit reached". Tested: four rapid meal
-logs give three awards and one rejection.
+error and moves to the next slot until the cap. Tested: 8 concurrent meal-log
+requests award exactly 3. Posting past the Living-post cap is still allowed; it
+just earns no more points that day.
 
 `User.totalPoints` is a cache updated in the same transaction as the insert, so
 the individual leaderboard is an indexed `ORDER BY totalPoints DESC`. The CG
-leaderboard is `SUM(totalPoints) GROUP BY zoneId`.
+leaderboard is `SUM(totalPoints) GROUP BY cellGroupId`.
 
-Point **values** (e.g. tithe = 100, meal = 5, post = 20) live in app config, not
-the schema, so they can be tuned without a migration.
+Point values and caps live in `POINT_RULES` (`src/services/points.ts`), not the
+schema, so they can be tuned without a migration. The tithe log is a
+declaration that this month's tithe is done. **No amount is ever asked for or stored.**
+
+Streaks count consecutive SGT days with at least one point-earning action, and
+are updated in the same SQL statement as the points total.
 
 ### 2. "Delete my data" is mostly enforced by foreign keys
 `DELETE FROM users WHERE id = ?` in one transaction:
 
 - **PII** (name, username, photo, PIN hash, Telegram ID): gone with the row.
 - **Prayers, comments, Living posts**: `authorId → NULL`, so they render as **"Former Member"**.
-  The post keeps its own `zoneId` snapshot, so zone filters still work.
+  The post keeps its own `cellGroupId` snapshot, so CG filters still work.
 - **Point ledger**: `CASCADE` deletes it, so the user's points leave the individual
   board **and** their CG total immediately.
 - **Reactions**: `CASCADE` (they identify the person).
+- **Uploads never attached to a post**: rows and R2 objects deleted.
 - **Audit trail**: one `USER_SELF_DELETE` row with no identifying metadata.
 
-Tested against a live Postgres: after deletion the prayer survives with
-`authorId = null`, its zone is kept, and no reactions or ledger rows remain.
+The API requires `{"confirm": "DELETE"}` in the body. Covered by `test/api.test.ts`.
 
 ### 3. Time is always Singapore time (UTC+8)
 Daily caps, streaks, "current week" and monthly goals use SGT calendar days
@@ -117,9 +133,68 @@ or reaction relations on testimonies.
 - **PIN lock**: stored server-side as a scrypt hash, with an attempt counter and
   lockout, so clearing local storage can't bypass it. Users reset it through the
   bot, which is already Telegram-authenticated.
-- **Name display**: `stayAnonymous` and `showOnBoards` are resolved into a public
-  name by one server-side function (Phase 2). The client never gets the real
-  name of someone it isn't allowed to see.
+- **Name display** is decided server-side in `src/lib/privacy.ts`, so the
+  client never receives a real name it isn't allowed to see.
+
+  **Individual leaderboard**
+
+  | Stay Anonymous | Show me on boards | Listed? | Name shown                                    |
+  |----------------|-------------------|---------|-----------------------------------------------|
+  | ON             | (any)             | No      | (points still count toward the CG total)      |
+  | OFF            | ON (default)      | Yes     | real name to CG peers, "Anonymous" to others  |
+  | OFF            | OFF               | Yes     | real name to everyone                         |
+
+  **Feeds** (Prayer Wall, Living it Out, comments): "Anonymous" if Stay Anonymous
+  is ON or the post was marked anonymous, otherwise the real name. Authors always
+  see their own name. A deleted author is "Former Member".
+- **Cell Group changes**: members pick their CG once. Because CG totals follow
+  current membership, later changes go through an admin so points can't be
+  moved between teams.
+
+## Security model (Phase 2)
+
+1. **Authentication: Telegram `initData`, HMAC-SHA256.** Every `/api` request
+   carries `Authorization: tma <Telegram.WebApp.initData>`. `telegramAuth`
+   recomputes the signature: `secret = HMAC_SHA256("WebAppData", BOT_TOKEN)`,
+   `hash = HMAC_SHA256(secret, sorted "key=value" lines)`. It compares the hashes
+   in constant time, rejects payloads older than `INIT_DATA_MAX_AGE_SECONDS` (or
+   dated in the future), duplicate keys and bot accounts. Only then does it load
+   the user by the **signed** Telegram ID. `initDataUnsafe` is never used. Tests
+   check our signer against an independent implementation written from the
+   Telegram docs, and check that a forged `user.id` is rejected.
+2. **Authorisation.** The role comes from the database row loaded for the
+   request, never from the client. `ADMIN_TELEGRAM_IDS` are promoted
+   automatically. `requireAdmin` guards admin routes.
+3. **Input.** Every body and query is validated with zod `.strict()` schemas,
+   so unknown fields such as `role` are rejected. JSON bodies are capped at 100 kB.
+4. **Uploads.** Uploads are authenticated, limited to 10 MB and 30 per hour per
+   user, and decoded and **re-encoded to WebP** server-side. Anything that isn't
+   a real image is rejected, and all metadata (including **EXIF GPS location**)
+   is stripped. Storage keys are random UUIDs.
+5. **Transport and headers.** helmet, CORS restricted to `WEBAPP_URL`, and
+   `Cache-Control: no-store` on API responses. Auth is a header, not a cookie,
+   so there is no CSRF surface.
+6. **Abuse.** Per-IP and per-user rate limits (in-memory: use a Redis store if
+   you run more than one instance). PIN brute force gets locked out after 5
+   wrong attempts for 15 minutes.
+7. **Errors.** Errors are returned as `{ error: { code, message } }`. Stack
+   traces and database details never reach the client.
+
+## Photo storage (Cloudflare R2)
+
+`src/lib/storage.ts` uses `@aws-sdk/client-s3`, so any S3-compatible bucket
+works. For R2:
+
+1. Create a bucket (e.g. `ap-building-fund`).
+2. Go to **R2 → Manage API tokens** and create a token with *Object Read & Write*
+   scoped to that bucket. Copy the access key ID and secret into `S3_ACCESS_KEY_ID`
+   and `S3_SECRET_ACCESS_KEY`.
+3. Set `S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com` and `S3_REGION=auto`.
+4. Either connect a public custom domain (or enable r2.dev) and set
+   `MEDIA_PUBLIC_BASE_URL`, or leave it empty to keep the bucket private and
+   serve 1-hour presigned URLs.
+
+Without these variables the server still runs; only uploads return 503.
 
 ## Local development
 
@@ -128,5 +203,11 @@ docker compose up -d db              # or any Postgres 16
 cp server/.env.example server/.env
 npm install
 npm run db:migrate                   # applies prisma/migrations
-npm run db:seed                      # zones ZN1–ZN4 + sample week/month
+npm run db:seed                      # Cell Groups AP1–AP4
+npm run dev                          # API on :3000
+npm test                             # needs Postgres; uses ap_building_fund_test
+
+# Call the API outside Telegram with a correctly signed header:
+curl -H "Authorization: $(npm run -s sign-init-data -w server -- 123456789 Grace)" \
+     localhost:3000/api/me
 ```

@@ -5,7 +5,10 @@
     "server"
   ],
   "scripts": {
-    "db:generate": "npm run db:generate -w server",
+    "dev": "npm run dev -w server",
+    "build": "npm run build -w server",
+    "test": "npm test -w server",
+    "typecheck": "npm run typecheck -w server",
     "db:migrate": "npm run db:migrate -w server",
     "db:seed": "npm run db:seed -w server"
   }

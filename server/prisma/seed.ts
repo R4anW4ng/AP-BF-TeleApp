@@ -1,38 +1,32 @@
-import "dotenv/config";
+import { config } from "../src/config.js";
 import { prisma } from "../src/db.js";
+import { campaignInfo, sgMonthStart, sgWeekStart, weeklyPublishAt } from "../src/lib/time.js";
 
-// Zones (Cell Groups). Override with SEED_ZONES="ZN1,ZN2,ZN3".
-const zoneCodes = (process.env.SEED_ZONES ?? "ZN1,ZN2,ZN3,ZN4")
+// Cell Groups in zone AP. Override with SEED_CELL_GROUPS="AP1,AP2,AP3".
+const cellGroupCodes = (process.env.SEED_CELL_GROUPS ?? "AP1,AP2,AP3,AP4")
   .split(",")
-  .map((z) => z.trim())
+  .map((c) => c.trim())
   .filter(Boolean);
 
-const SGT_OFFSET_MS = 8 * 60 * 60 * 1000;
-
-/** Monday 00:00 SGT of the week containing `now`, as a UTC-midnight Date for @db.Date. */
-function sgtMondayOf(now: Date): Date {
-  const sgt = new Date(now.getTime() + SGT_OFFSET_MS);
-  const daysSinceMonday = (sgt.getUTCDay() + 6) % 7;
-  return new Date(Date.UTC(sgt.getUTCFullYear(), sgt.getUTCMonth(), sgt.getUTCDate() - daysSinceMonday));
-}
-
-/** Monday 05:00 SGT == Sunday 21:00 UTC. */
-function publishAtFor(weekStart: Date): Date {
-  return new Date(weekStart.getTime() + 5 * 60 * 60 * 1000 - SGT_OFFSET_MS);
-}
-
-async function main() {
-  for (const [i, code] of zoneCodes.entries()) {
-    await prisma.zone.upsert({
+async function seedCellGroups() {
+  for (const [i, code] of cellGroupCodes.entries()) {
+    await prisma.cellGroup.upsert({
       where: { code },
       update: {},
-      create: { code, name: `Zone ${code.replace(/\D/g, "") || code}`, sortOrder: i },
+      create: { code, name: `Cell Group ${code}`, sortOrder: i },
     });
   }
+  console.log(`Cell Groups: ${cellGroupCodes.join(", ")}`);
+}
 
-  const campaignStart = new Date(`${process.env.CAMPAIGN_START ?? "2026-01-05"}T00:00:00Z`);
-  const weekStart = sgtMondayOf(new Date());
-  const weekNumber = Math.floor((weekStart.getTime() - sgtMondayOf(campaignStart).getTime()) / (7 * 86400000)) + 1;
+/**
+ * Sample Home content for local development only (SEED_SAMPLE_CONTENT=true).
+ * Marked as already broadcast so the Monday cron never pushes it to real users.
+ */
+async function seedSampleContent() {
+  const now = new Date();
+  const weekStart = sgWeekStart(now);
+  const weekNumber = campaignInfo(config.CAMPAIGN_START, config.CAMPAIGN_END, now).weekNumber ?? 1;
 
   await prisma.weeklyChallenge.upsert({
     where: { weekStart },
@@ -42,26 +36,30 @@ async function main() {
       weekNumber,
       title: "Sample week: everyday sacrifices",
       financialInitiatives: ["No Grab", "Water Only"],
-      memoryVerseText:
-        "Bring the whole tithe into the storehouse, that there may be food in my house.",
+      memoryVerseText: "Bring the whole tithe into the storehouse, that there may be food in my house.",
       memoryVerseRef: "Malachi 3:10",
-      publishAt: publishAtFor(weekStart),
+      publishAt: weeklyPublishAt(weekStart),
       status: "PUBLISHED",
-      // Mark as already broadcast so seeding never triggers a real push.
-      broadcastStartedAt: new Date(),
-      broadcastCompletedAt: new Date(),
+      broadcastStartedAt: now,
+      broadcastCompletedAt: now,
     },
   });
 
-  const sgtNow = new Date(Date.now() + SGT_OFFSET_MS);
-  const month = new Date(Date.UTC(sgtNow.getUTCFullYear(), sgtNow.getUTCMonth(), 1));
   await prisma.monthlyGoal.upsert({
-    where: { month },
+    where: { month: sgMonthStart(now) },
     update: {},
-    create: { month, title: "Sacrifice ME time", description: "Give one hour a week back to God and others." },
+    create: {
+      month: sgMonthStart(now),
+      title: "Sacrifice ME time",
+      description: "Give one hour a week back to God and others.",
+    },
   });
+  console.log("Sample weekly challenge and monthly goal created.");
+}
 
-  console.log(`Seeded ${zoneCodes.length} zones, week ${weekNumber} challenge, and monthly goal.`);
+async function main() {
+  await seedCellGroups();
+  if (process.env.SEED_SAMPLE_CONTENT === "true") await seedSampleContent();
 }
 
 main()
