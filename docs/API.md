@@ -1,4 +1,4 @@
-# API reference (Phase 2)
+# API reference
 
 Base path `/api`. Every request needs:
 
@@ -83,6 +83,56 @@ Living it Out points (10, max 2 per day) are awarded automatically when a post i
 `TESTIMONY` is admin-only. Returns `201 { id, url, width, height }`. Send `id`
 with the post that uses the photo. Images are re-encoded to WebP (max 1600 px)
 and all metadata, including GPS location, is removed.
+
+## Feeds
+
+Lists are newest first and paginated with `?cursor=<nextCursor>&limit=<1–50, default 20>`.
+They return `{ items, nextCursor }`, where `nextCursor` is `null` on the last page.
+Authors are resolved server-side by the privacy rules into
+`{ name, isMe, isAnonymous }`. No other user's id, Telegram ID or raw name is
+ever returned. A deleted author is `"Former Member"`.
+
+### Prayer Wall: `/api/prayers`
+
+| Method & path                     | Body                                   | Returns |
+|-----------------------------------|----------------------------------------|---------|
+| `GET /prayers`                    | —                                      | Page of prayers: `{ id, content, isAnswered, createdAt, author, cellGroup, reactions: { counts: {HEART, AMEN, PRAYING, HUG}, mine: [...] }, commentCount, comments: [{ id, content, createdAt, author }] }` (up to 50 comments each, oldest first) |
+| `POST /prayers`                   | `{ content (≤2000), isAnonymous? }`    | `201` prayer |
+| `POST /prayers/:id/comments`      | `{ content (≤1000), isAnonymous? }`    | `201` the updated prayer |
+| `POST /prayers/:id/reactions`     | `{ type: "HEART"\|"AMEN"\|"PRAYING"\|"HUG" }` | `{ id, reactions }`. Toggles: a second tap removes it. |
+
+### Living it Out: `/api/living`
+
+| Method & path      | Body | Returns |
+|--------------------|------|---------|
+| `GET /living?zone=AP1` | — | Page of `{ id, content, weekNumber (0 = before launch), createdAt, author, cellGroup, images: [{ id, url, width, height }] }`. Omit `zone` or pass `ALL` for every Cell Group. |
+| `POST /living`     | `multipart/form-data`: `content` (≤2000), `isAnonymous` (`"true"`/`"false"`), 0–4 files in `images` (≤10 MB each) | `201 { post, points }`. `points` is an award result: 10 points, max 2 per SGT day. Past the cap the post is still published with `points.awarded: false`. Photos are re-encoded to WebP and stripped of GPS location before going to R2. If anything fails, nothing is kept. |
+
+### Testimonies: `/api/testimonies`
+
+| Method & path              | Who    | Returns |
+|----------------------------|--------|---------|
+| `GET /testimonies`         | all    | `{ items: [{ id, slug, title, subtitle, byline, status, publishedAt, coverUrl, excerpt }] }`, published only. Admins can add `?status=all` to include drafts. |
+| `GET /testimonies/:idOrSlug` | all  | Summary fields plus `updatedAt` and `blocks`. Image blocks include `url`, `width` and `height`. Drafts return 404 to non-admins. |
+| `POST /testimonies`        | admin  | Body below. `201` full testimony. |
+| `PUT /testimonies/:id`     | admin  | Full replace with the same body. Images no longer referenced are deleted. |
+| `DELETE /testimonies/:id`  | admin  | `204`. Its images are deleted from the database and R2. |
+
+```json
+{
+  "title": "How God provided our rent",
+  "subtitle": "optional", "byline": "A family in AP2", "coverMediaId": "optional upload id",
+  "status": "DRAFT | PUBLISHED",
+  "blocks": [
+    { "type": "heading", "text": "…" },
+    { "type": "paragraph", "text": "…" },
+    { "type": "quote", "text": "…", "cite": "Philippians 4:19" },
+    { "type": "image", "mediaId": "<id from POST /api/uploads?kind=TESTIMONY>", "caption": "…" }
+  ]
+}
+```
+
+Testimonies have no comments or reactions. Every create, update and delete is written to the audit log.
 
 ## Health (no auth)
 

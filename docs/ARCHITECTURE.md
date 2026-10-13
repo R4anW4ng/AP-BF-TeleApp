@@ -4,7 +4,7 @@
 
 | Layer      | Choice                                                         |
 |------------|----------------------------------------------------------------|
-| Frontend   | React + Vite + TypeScript + `@telegram-apps/sdk` (`web/`, Phase 4) |
+| Frontend   | React 19 + Vite 8 + TypeScript + `@twa-dev/sdk`, React Router, TanStack Query (`web/`) |
 | Backend    | Node.js + TypeScript + Express (`server/`, Phase 2)            |
 | Bot + cron | `node-telegram-bot-api` v2 + `node-cron` v4, same process as the API |
 | Database   | **PostgreSQL 16 + Prisma 7** (`server/prisma/schema.prisma`)    |
@@ -39,10 +39,16 @@ server/
   src/lib/pin.ts              scrypt PIN hashing
   src/middleware/             telegramAuth, requireAdmin, rate limits, errors
   src/services/               points (caps, streaks), users (sync, delete), broadcast
-  src/routes/                 /api/me, /home, /points, /cell-groups, /uploads
+  src/routes/                 /api/me, /home, /points, /cell-groups, /uploads,
+                              /prayers, /living, /testimonies
   scripts/sign-init-data.ts   signed auth header for local curl testing
   test/                       vitest: unit + API tests against Postgres
-web/                          React Mini App (Phase 4)
+web/
+  src/telegram.ts             SDK bridge: getInitData(), ready/expand, BackButton
+  src/api/client.ts           fetch wrapper that injects `Authorization: tma <initData>`
+  src/api/index.ts            React Query hooks for every endpoint
+  src/components/             BottomNav, Layout, AuthGate, PinGate, UI bits
+  src/pages/                  Home, Prayer, Living, Testimonies, Me, Admin
 docs/                         this file, API.md
 ```
 
@@ -255,6 +261,43 @@ goes out within 15 minutes, as long as it's within 24 h of `publishAt`.
 and the remaining users are not retried automatically, so nobody gets a duplicate.
 The counts on the challenge show it.
 
+## Frontend (Phase 4)
+
+### How `initData` reaches the server
+
+1. Telegram opens `WEBAPP_URL` with the signed launch data in the URL hash
+   (`#tgWebAppData=…`). `@twa-dev/sdk` loads Telegram's official
+   `telegram-web-app.js`, which parses it into `Telegram.WebApp.initData` (and
+   keeps it in `sessionStorage`, so a reload still works).
+2. `getInitData()` (`src/telegram.ts`) returns that **raw string** unchanged.
+   `initDataUnsafe` is never read: it's an unsigned copy the page could alter.
+3. The one API client (`src/api/client.ts`) calls `getInitData()` on **every**
+   request and sets `Authorization: tma <initData>`. That covers GET, JSON
+   writes and multipart uploads (where the browser sets the boundary). No
+   component builds its own headers. Without initData it refuses to call the
+   API at all.
+4. The server's HMAC middleware verifies it (Phase 2). `AuthGate` renders
+   nothing until `GET /api/me` succeeds. On `401` (expired or invalid) it shows
+   "Open from Telegram" instead of retrying.
+
+Verified in a real browser against the running server: 12 of 12 API requests
+carried the header, a forged `user.id` was rejected, and a plain browser
+without launch data made no API calls.
+
+### Routing
+
+`BrowserRouter` routes `/`, `/prayer`, `/living`, `/testimonies`
+(`/testimonies/:slug` for the reader), `/me` and `/admin`. The bottom tab bar is
+persistent. The **Admin** tab and route appear only when `/api/me` returns
+`isAdmin: true`. That's cosmetic; the server enforces admin-only actions
+itself. Hash routing isn't used because Telegram puts its launch data in the
+hash. The host must serve `index.html` for every path: `public/_redirects`
+does this on Cloudflare Pages and Netlify.
+
+Data is fetched with TanStack Query. Home always refetches when the app opens
+or regains focus (including Telegram's `activated` event), so Monday's
+challenge appears right after 05:00 SGT.
+
 ## Local development
 
 ```bash
@@ -265,6 +308,11 @@ npm run db:migrate                   # applies prisma/migrations
 npm run db:seed                      # Cell Groups AP1–AP4
 npm run dev                          # API on :3000
 npm test                             # needs Postgres; uses ap_building_fund_test
+
+# Frontend on :5173 (proxies /api to :3000)
+npm run dev:web
+# To use it in a normal browser, put a signed value in web/.env:
+#   VITE_DEV_INIT_DATA=<output of sign-init-data without the "tma " prefix>
 
 # Call the API outside Telegram with a correctly signed header:
 curl -H "Authorization: $(npm run -s sign-init-data -w server -- 123456789 Grace)" \

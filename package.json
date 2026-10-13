@@ -2,13 +2,15 @@
   "name": "ap-bf-teleapp",
   "private": true,
   "workspaces": [
-    "server"
+    "server",
+    "web"
   ],
   "scripts": {
     "dev": "npm run dev -w server",
-    "build": "npm run build -w server",
-    "test": "npm test -w server",
-    "typecheck": "npm run typecheck -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w server && npm run build -w web",
+    "test": "npm test -w server && npm test -w web",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
     "db:migrate": "npm run db:migrate -w server",
     "db:seed": "npm run db:seed -w server"
   }
