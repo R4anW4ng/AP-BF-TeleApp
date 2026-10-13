@@ -2,6 +2,11 @@ import "dotenv/config";
 import { z } from "zod";
 
 const sgDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
+const bool = (fallback: boolean) =>
+  z
+    .enum(["true", "false"])
+    .default(fallback ? "true" : "false")
+    .transform((v) => v === "true");
 const optional = z
   .string()
   .optional()
@@ -13,8 +18,15 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
 
   TELEGRAM_BOT_TOKEN: z.string().regex(/^\d+:[\w-]{30,}$/, "doesn't look like a bot token"),
-  /** Origin(s) of the deployed Mini App, comma-separated. Used for CORS. */
+  /**
+   * URL of the deployed Mini App. The first entry is what the bot's "Open app"
+   * button launches; every entry's origin is allowed by CORS (comma-separated).
+   */
   WEBAPP_URL: z.string().min(1),
+  /** Long-poll Telegram for updates in this process. Only ONE instance may poll per bot token. */
+  BOT_POLLING: bool(true),
+  /** Run the Monday 05:00 SGT broadcast (and its catch-up sweep) in this process. */
+  CRON_ENABLED: bool(true),
   /** How old an initData payload may be before we reject it. */
   INIT_DATA_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(86_400),
   /** Number of reverse-proxy hops in front of the app (0 = none). */
@@ -57,6 +69,7 @@ export const config = {
   ...env,
   isProduction: env.NODE_ENV === "production",
   adminTelegramIds: parseAdminIds(env.ADMIN_TELEGRAM_IDS),
+  webAppUrl: new URL(env.WEBAPP_URL.split(",")[0].trim()).toString(),
   corsOrigins: env.WEBAPP_URL.split(",").map((u) => new URL(u.trim()).origin),
   storage:
     env.S3_ENDPOINT && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY && env.S3_BUCKET

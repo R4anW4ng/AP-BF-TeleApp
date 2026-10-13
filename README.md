@@ -7,7 +7,7 @@ financial accountability, spiritual tracking and gamified engagement.
 |-------|-----------------------------------------|---------|
 | 1     | Architecture & database (Prisma schema) | ✅ done |
 | 2     | Express server, `initData` HMAC validation, R2 uploads | ✅ done |
-| 3     | Bot, `/start` Web App button, Monday 05:00 SGT cron | ⏳ |
+| 3     | Bot, `/start` Web App button, Monday 05:00 SGT cron | ✅ done |
 | 4     | React + Telegram SDK setup, 5-tab routing | ⏳    |
 | 5     | Leaderboard + Admin Dashboard UI        | ⏳      |
 

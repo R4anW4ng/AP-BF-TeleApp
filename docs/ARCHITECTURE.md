@@ -6,7 +6,7 @@
 |------------|----------------------------------------------------------------|
 | Frontend   | React + Vite + TypeScript + `@telegram-apps/sdk` (`web/`, Phase 4) |
 | Backend    | Node.js + TypeScript + Express (`server/`, Phase 2)            |
-| Bot + cron | `node-telegram-bot-api` + `node-cron`, same process as the API (Phase 3) |
+| Bot + cron | `node-telegram-bot-api` v2 + `node-cron` v4, same process as the API |
 | Database   | **PostgreSQL 16 + Prisma 7** (`server/prisma/schema.prisma`)    |
 
 ### Why PostgreSQL over MongoDB
@@ -27,7 +27,9 @@ server/
   prisma/schema.prisma        data model
   prisma/migrations/          SQL migrations (committed)
   prisma/seed.ts              Cell Groups AP1–AP4 (+ optional sample content)
-  src/index.ts                process entry: HTTP server (+ bot/cron in Phase 3)
+  src/index.ts                process entry: HTTP server + bot polling + cron
+  src/bot.ts                  /start, /help, /resetpin, block tracking
+  src/cron.ts                 Monday 05:00 SGT schedule + catch-up sweep
   src/app.ts                  Express app: helmet, CORS, rate limits, routes
   src/config.ts               zod-validated environment
   src/lib/telegramInitData.ts initData HMAC-SHA256 validation
@@ -36,7 +38,7 @@ server/
   src/lib/time.ts             Singapore-time and campaign-week helpers
   src/lib/pin.ts              scrypt PIN hashing
   src/middleware/             telegramAuth, requireAdmin, rate limits, errors
-  src/services/               points (caps, streaks), users (sync, delete)
+  src/services/               points (caps, streaks), users (sync, delete), broadcast
   src/routes/                 /api/me, /home, /points, /cell-groups, /uploads
   scripts/sign-init-data.ts   signed auth header for local curl testing
   test/                       vitest: unit + API tests against Postgres
@@ -195,6 +197,63 @@ works. For R2:
    serve 1-hour presigned URLs.
 
 Without these variables the server still runs; only uploads return 503.
+
+## Bot and Monday broadcast (Phase 3)
+
+The bot runs in the same process as the API (`src/index.ts`) and long-polls
+Telegram. If Telegram is unreachable at boot, it retries in the background
+while the API keeps serving.
+
+| Command / update | Effect |
+|------------------|--------|
+| `/start`         | Upserts the user by Telegram ID (`botStartedAt` set, `botBlocked` cleared) and replies with a welcome message and an inline **web_app** button that opens `WEBAPP_URL`. In groups it asks people to message privately. |
+| `/help`          | Lists commands, with the app button. |
+| `/resetpin`      | Removes the sender's app PIN (forgotten-PIN recovery). |
+| `my_chat_member` | Telegram reports block/unblock: sets/clears `botBlocked`. |
+
+### Timezone handling
+
+1. **The schedule.** `cron.ts` registers `0 5 * * 1` with `timezone: "Asia/Singapore"`.
+   node-cron evaluates the expression in that zone (via `Intl`), not in the
+   host's local time. It fires at Monday 05:00 SGT, which is Sunday 21:00 UTC,
+   wherever the server runs. Singapore has no daylight saving, so the instant
+   never drifts.
+2. **The data.** Inside the job, "this week" and "this month" come from
+   `lib/time.ts`, which applies the fixed +08:00 offset explicitly
+   (`sgWeekStart`, `sgMonthStart`). It never reads the host's `TZ`.
+3. **The handshake with the Mini App.** A challenge's `publishAt` is stored as
+   the UTC instant of Monday 05:00 SGT. The broadcast and `GET /api/home` both
+   use "latest challenge with `publishAt <= now`", so the moment the push goes
+   out, the app shows the same challenge.
+4. **Proof.** The whole test suite runs with `TZ=America/New_York`. The cron
+   tests check the server's real task matches `2026-10-18T21:00Z` (Mon 05:00 SGT)
+   and not Monday 05:00 UTC or New York, and that its next 10 runs are all
+   Sunday 21:00 UTC, exactly 7 days apart.
+
+### Broadcast flow (`services/broadcast.ts`)
+
+1. Find **this SGT week's** challenge (`SCHEDULED`/`PUBLISHED`, `publishAt`
+   passed within the last 24 h). Last week's is never re-sent.
+2. **Claim it atomically**: `UPDATE … SET broadcastStartedAt = now WHERE broadcastStartedAt IS NULL`.
+   Only one caller wins, so the Monday job, the 15-minute catch-up sweep, a
+   restart or a second instance can't send twice.
+3. Load this month's `MonthlyGoal` and build one HTML message (verse,
+   initiatives, goal; admin text escaped and clipped under 4096 characters)
+   with the app button.
+4. Page through users who are not `botBlocked` and have `notificationsEnabled`,
+   200 at a time. Each `sendMessage` has its own `try/catch`. On 403 (blocked)
+   or "chat not found", the user is logged by internal ID and flagged
+   `botBlocked`. Other errors are logged. Either way the loop continues.
+   Sending is throttled to 25 msgs/s, and 429s are retried honouring `retry_after`.
+5. Record `broadcastCompletedAt` and the sent/failed counts on the challenge.
+
+**Catch-up sweep** (`*/15 * * * *`, also at startup): if the server was down
+at 05:00, or an admin publishes this week's challenge late, the broadcast still
+goes out within 15 minutes, as long as it's within 24 h of `publishAt`.
+
+**Limitation:** if the process dies mid-broadcast, the challenge stays claimed
+and the remaining users are not retried automatically, so nobody gets a duplicate.
+The counts on the challenge show it.
 
 ## Local development
 

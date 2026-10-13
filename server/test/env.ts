@@ -1,6 +1,8 @@
 /** Environment for the test run. Uses a separate database so tests never touch dev data. */
 export const TEST_ENV = {
   NODE_ENV: "test",
+  // Deliberately NOT Singapore: proves no logic depends on the host's timezone.
+  TZ: "America/New_York",
   DATABASE_URL:
     process.env.TEST_DATABASE_URL ??
     "postgresql://postgres:postgres@localhost:5432/ap_building_fund_test?schema=public",
