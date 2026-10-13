@@ -1,0 +1,431 @@
+// =============================================================================
+//  AP Building Fund — Telegram Mini App
+//  Prisma schema (PostgreSQL)
+//
+//  Conventions
+//  - Primary keys are CUIDs (non-enumerable, safe to expose to the Mini App).
+//  - Telegram user IDs are BigInt (they exceed 2^31). Serialise as strings in JSON.
+//  - "SGT day" = calendar day in Asia/Singapore (UTC+8). Daily caps, streaks and
+//    weekly rollovers are all computed in SGT, never in server-local time.
+//  - Points are an append-only ledger (PointTransaction). User.totalPoints is a
+//    denormalised cache updated in the SAME transaction as each ledger insert.
+//  - Deleting a User hard-deletes PII. Content they authored survives with
+//    authorId = NULL and is rendered as "Former Member"; their ledger rows
+//    cascade-delete, so their points vanish from every leaderboard.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+//  Enums
+// -----------------------------------------------------------------------------
+
+enum Role {
+  USER
+  ADMIN
+}
+
+/// Every way a user can earn (or lose) points. Point values live in app config,
+/// not here, so they can be tuned without a migration.
+enum PointType {
+  TITHE // monthly tithe logged — large bonus, once per SGT month
+  MEAL_LOG // "Daily Meal Log" tap — small bonus, max 3 per SGT day
+  LIVING_POST // photo/story on "Living it Out" — medium bonus
+  ADMIN_ADJUSTMENT // manual correction by an admin (may be negative)
+}
+
+enum ReactionType {
+  HEART
+  AMEN
+  PRAYING
+  HUG
+}
+
+enum ContentStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum MediaKind {
+  LIVING_POST
+  TESTIMONY
+}
+
+enum AuditAction {
+  PROMOTE_ADMIN
+  DEMOTE_ADMIN
+  CHALLENGE_CREATE
+  CHALLENGE_UPDATE
+  CHALLENGE_DELETE
+  MONTHLY_GOAL_UPSERT
+  MONTHLY_GOAL_DELETE
+  CELL_GROUP_CHANGE
+  TESTIMONY_CREATE
+  TESTIMONY_UPDATE
+  TESTIMONY_DELETE
+  CONTENT_HIDE
+  POINTS_ADJUST
+  USER_SELF_DELETE
+}
+
+// -----------------------------------------------------------------------------
+//  Cell Groups (AP1, AP2, ... within zone AP)
+// -----------------------------------------------------------------------------
+
+/// A Cell Group, e.g. AP1, AP2. A table (not an enum) so admins can add
+/// groups without a migration. The parent zone ("AP") is app config.
+model CellGroup {
+  id        String   @id @default(cuid())
+  code      String   @unique // "AP1"
+  name      String // "Cell Group AP1"
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  users       User[]
+  prayers     Prayer[]
+  livingPosts LivingPost[]
+
+  @@map("cell_groups")
+}
+
+// -----------------------------------------------------------------------------
+//  Users
+// -----------------------------------------------------------------------------
+
+model User {
+  id         String @id @default(cuid())
+  telegramId BigInt @unique
+
+  // --- PII (all hard-deleted with the row on "Delete my data") ---------------
+  firstName    String
+  lastName     String?
+  username     String?
+  /// Name the user chose to show in the app; falls back to firstName + lastName.
+  displayName  String?
+  photoUrl     String?
+  languageCode String?
+
+  role        Role       @default(USER)
+  cellGroupId String?
+  cellGroup   CellGroup? @relation(fields: [cellGroupId], references: [id], onDelete: SetNull)
+
+  // --- Privacy (resolved into a public name by a single server-side function)
+  /// "Stay Anonymous": hide real name on leaderboards and feeds for everyone.
+  stayAnonymous Boolean @default(false)
+  /// "Show me on boards": real name visible to CG peers only; outsiders see "Anonymous".
+  showOnBoards  Boolean @default(true)
+
+  // --- App PIN lock (scrypt hash, never the raw PIN) -------------------------
+  pinHash           String?
+  pinFailedAttempts Int       @default(0)
+  pinLockedUntil    DateTime?
+
+  // --- Gamification caches (source of truth: PointTransaction) -------------
+  totalPoints    Int       @default(0)
+  currentStreak  Int       @default(0)
+  longestStreak  Int       @default(0)
+  /// Last SGT calendar day the user did a point-earning action.
+  lastActiveDate DateTime? @db.Date
+
+  // --- Bot delivery ---------------------------------------------------------
+  /// Set when the user has pressed /start, i.e. the bot may DM them.
+  botStartedAt         DateTime?
+  /// Set true when Telegram returns 403 (user blocked the bot); skip in broadcasts.
+  botBlocked           Boolean   @default(false)
+  notificationsEnabled Boolean   @default(true)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lastSeenAt DateTime @default(now())
+
+  pointTransactions PointTransaction[]
+  prayers           Prayer[]
+  prayerComments    PrayerComment[]
+  prayerReactions   PrayerReaction[]
+  livingPosts       LivingPost[]
+  media             Media[]
+  testimonies       Testimony[]
+  challenges        WeeklyChallenge[]
+  monthlyGoals      MonthlyGoal[]
+  auditLogsAsActor  AuditLog[]         @relation("AuditActor")
+
+  @@index([cellGroupId])
+  @@index([totalPoints(sort: Desc)])
+  @@index([botStartedAt, botBlocked, notificationsEnabled])
+  @@map("users")
+}
+
+// -----------------------------------------------------------------------------
+//  Points ledger
+// -----------------------------------------------------------------------------
+
+/// Append-only. Caps are enforced by the DATABASE via the unique key
+/// (userId, type, periodKey, slot), so concurrent double-taps cannot over-award:
+///
+///   TITHE        periodKey = "2026-10"     slot = 1          -> once per month
+///   MEAL_LOG     periodKey = "2026-10-13"  slot = 1..3       -> max 3 per day
+///   LIVING_POST  periodKey = "2026-10-13"  slot = 1..N       -> configurable daily cap
+///   ADMIN_ADJUST periodKey = <cuid>        slot = 1          -> unique per adjustment
+///
+/// The service picks the next free slot; a P2002 unique violation means "cap
+/// reached / already logged" and is returned to the client as such.
+model PointTransaction {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      PointType
+  points    Int
+  periodKey String
+  slot      Int       @default(1)
+  /// SGT calendar day the action happened (drives streaks and daily stats).
+  sgDate    DateTime  @db.Date
+  /// Optional link to the thing that earned the points (e.g. LivingPost.id).
+  sourceId  String?
+  note      String?
+  createdAt DateTime  @default(now())
+
+  @@unique([userId, type, periodKey, slot])
+  @@index([userId, sgDate])
+  @@index([type, sgDate])
+  @@map("point_transactions")
+}
+
+// -----------------------------------------------------------------------------
+//  Campaign content (admin-authored)
+// -----------------------------------------------------------------------------
+
+/// One row per campaign week. Becomes "current" on the Home screen the moment
+/// now() >= publishAt (Monday 05:00 SGT = Sunday 21:00 UTC), so the Mini App
+/// and the cron broadcast always agree without any extra sync step.
+model WeeklyChallenge {
+  id                   String        @id @default(cuid())
+  /// Monday (SGT) that starts this week.
+  weekStart            DateTime      @unique @db.Date
+  /// 1-based campaign week number, denormalised for display.
+  weekNumber           Int
+  title                String
+  /// e.g. ["No Grab", "Water Only"]
+  financialInitiatives String[]
+  description          String?
+  memoryVerseText      String
+  memoryVerseRef       String // "Malachi 3:10"
+  /// Normally weekStart 05:00 SGT; stored explicitly so admins can override.
+  publishAt            DateTime
+  status               ContentStatus @default(SCHEDULED)
+  /// Set by the cron job once the push broadcast has run (idempotency guard).
+  broadcastStartedAt   DateTime?
+  broadcastCompletedAt DateTime?
+  broadcastSentCount   Int           @default(0)
+  broadcastFailedCount Int           @default(0)
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, publishAt])
+  @@map("weekly_challenges")
+}
+
+/// The spiritual goal for a calendar month, e.g. "Sacrifice ME time".
+model MonthlyGoal {
+  id          String   @id @default(cuid())
+  /// First day of the month (SGT).
+  month       DateTime @unique @db.Date
+  title       String
+  description String?
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("monthly_goals")
+}
+
+// -----------------------------------------------------------------------------
+//  Prayer Wall
+// -----------------------------------------------------------------------------
+
+model Prayer {
+  id          String     @id @default(cuid())
+  /// NULL after the author deletes their data -> rendered as "Former Member".
+  authorId    String?
+  author      User?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  /// Cell Group snapshot at time of posting (kept after author deletion).
+  cellGroupId String?
+  cellGroup   CellGroup? @relation(fields: [cellGroupId], references: [id], onDelete: SetNull)
+  content     String
+  /// Per-post choice to post anonymously (independent of profile setting).
+  isAnonymous Boolean    @default(false)
+  isAnswered  Boolean    @default(false)
+  /// Moderation soft-hide by an admin.
+  hiddenAt    DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  comments  PrayerComment[]
+  reactions PrayerReaction[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([cellGroupId, createdAt(sort: Desc)])
+  @@index([authorId])
+  @@map("prayers")
+}
+
+model PrayerComment {
+  id          String    @id @default(cuid())
+  prayerId    String
+  prayer      Prayer    @relation(fields: [prayerId], references: [id], onDelete: Cascade)
+  authorId    String?
+  author      User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  content     String
+  isAnonymous Boolean   @default(false)
+  hiddenAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([prayerId, createdAt])
+  @@index([authorId])
+  @@map("prayer_comments")
+}
+
+/// One row per (prayer, user, reaction type); a user may leave several types.
+/// Reactions are identity-linked, so they are deleted with the user.
+model PrayerReaction {
+  id        String       @id @default(cuid())
+  prayerId  String
+  prayer    Prayer       @relation(fields: [prayerId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      ReactionType
+  createdAt DateTime     @default(now())
+
+  @@unique([prayerId, userId, type])
+  @@index([prayerId, type])
+  @@map("prayer_reactions")
+}
+
+// -----------------------------------------------------------------------------
+//  Living it Out (community feed)
+// -----------------------------------------------------------------------------
+
+model LivingPost {
+  id          String     @id @default(cuid())
+  authorId    String?
+  author      User?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  /// Cell Group snapshot at time of posting — powers the CG filter.
+  cellGroupId String?
+  cellGroup   CellGroup? @relation(fields: [cellGroupId], references: [id], onDelete: SetNull)
+  content     String
+  /// Campaign week number at time of posting.
+  weekNumber  Int
+  isAnonymous Boolean    @default(false)
+  hiddenAt    DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  media Media[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([cellGroupId, createdAt(sort: Desc)])
+  @@index([authorId])
+  @@map("living_posts")
+}
+
+// -----------------------------------------------------------------------------
+//  Testimonies (read-only magazine, admin-published)
+// -----------------------------------------------------------------------------
+
+/// `blocks` is structured JSON, NOT HTML/Markdown, so the client renders it with
+/// plain React elements and there is no XSS surface:
+///   [{ "type": "heading",   "text": "..." },
+///    { "type": "paragraph", "text": "..." },
+///    { "type": "image",     "mediaId": "ck...", "caption": "..." },
+///    { "type": "quote",     "text": "...", "cite": "..." }]
+/// Validated with zod on write. No comments/reactions relations by design.
+model Testimony {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  title        String
+  subtitle     String?
+  coverMediaId String?       @unique
+  coverMedia   Media?        @relation("TestimonyCover", fields: [coverMediaId], references: [id], onDelete: SetNull)
+  blocks       Json
+  /// Optional byline, e.g. "A member of ZN2" — free text chosen by the admin.
+  byline       String?
+  status       ContentStatus @default(DRAFT)
+  publishedAt  DateTime?
+
+  authorId  String?
+  author    User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  media Media[] @relation("TestimonyMedia")
+
+  @@index([status, publishedAt(sort: Desc)])
+  @@map("testimonies")
+}
+
+// -----------------------------------------------------------------------------
+//  Media (uploaded images)
+// -----------------------------------------------------------------------------
+
+/// Images are stored in object storage (S3/R2/local disk); only the key lives here.
+model Media {
+  id         String    @id @default(cuid())
+  kind       MediaKind
+  storageKey String    @unique
+  mimeType   String
+  sizeBytes  Int
+  width      Int?
+  height     Int?
+  sortOrder  Int       @default(0)
+
+  uploaderId String?
+  uploader   User?   @relation(fields: [uploaderId], references: [id], onDelete: SetNull)
+
+  livingPostId String?
+  livingPost   LivingPost? @relation(fields: [livingPostId], references: [id], onDelete: Cascade)
+  testimonyId  String?
+  testimony    Testimony?  @relation("TestimonyMedia", fields: [testimonyId], references: [id], onDelete: Cascade)
+  coverOf      Testimony?  @relation("TestimonyCover")
+
+  createdAt DateTime @default(now())
+
+  @@index([livingPostId, sortOrder])
+  @@index([testimonyId, sortOrder])
+  @@map("media")
+}
+
+// -----------------------------------------------------------------------------
+//  Audit log (admin accountability)
+// -----------------------------------------------------------------------------
+
+/// Records every privileged action. `targetId` is a plain value (not a FK) so
+/// the trail survives deletion of the target. USER_SELF_DELETE rows must never
+/// store a name or Telegram ID in `metadata` — only the fact and the timestamp.
+model AuditLog {
+  id         String      @id @default(cuid())
+  actorId    String?
+  actor      User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action     AuditAction
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+
+  @@index([action, createdAt(sort: Desc)])
+  @@index([actorId])
+  @@map("audit_logs")
+}
